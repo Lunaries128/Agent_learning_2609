@@ -6,7 +6,7 @@ dotenv.load_dotenv()
 
 client = init_chat_model(
     model_provider="openai",
-    model="qwen3.7-max",
+    model="qwen3.8-max",
         # 因为openai和langchain底层设计差异，需要增加开启推理开关
     extra_body={
         "enable_thinking": True
