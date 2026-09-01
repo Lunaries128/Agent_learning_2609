@@ -1,0 +1,48 @@
+ChatCompletion(
+    id='chatcmpl-f3d4e8f2-ff6a-9a94-b28c-d1537df64743',
+    choices=[
+        Choice(
+            finish_reason='stop',
+            index=0,
+            logprobs=None,
+            message=ChatCompletionMessage(
+                content='我是 Qwen3.8（通义千问），由阿里巴巴集团独立研发的大语言模型。很高兴能为你提供帮助！无论是回答问题、提供建议，还是进行创意写作、代码调试等，我都会尽力协助你。有什么我可以帮你的吗？ 😊',
+                refusal=None,
+                role='assistant',
+                annotations=None,
+                audio=None,
+                function_call=None,
+                tool_calls=None,
+                #大模型的思考内容
+                reasoning_content='用户问“你是谁？”，这是关于身份的问题。根据提供的参考信息，我是 Qwen3.8，由阿里巴巴集团独立开发的大语言模型。需要以自然、亲切的方式回应，同时保持简洁。\n\n关键点：\n1. 确认身份：Qwen3.8（通义千问）\n2. 开发方：阿里巴巴集团\n3. 语气：友好、自然，避免冗长\n4. 可补充能力或用途，但保持简洁\n\n不需要提及具体版本号细节（除非用户特别询问），但当前身份明确为 Qwen3.8，所以可以提及。'
+            )
+        )
+    ],
+    created=1788246049,
+    model='qwen3.8-max',
+    object='chat.completion',
+    metadata=None,
+    moderation=None,
+    service_tier=None,
+    system_fingerprint=None,
+    usage=CompletionUsage(
+        completion_tokens=184,
+        prompt_tokens=63,
+        total_tokens=247,
+        completion_tokens_details=CompletionTokensDetails(
+            accepted_prediction_tokens=None,
+            audio_tokens=None,
+            reasoning_tokens=127,
+            rejected_prediction_tokens=None,
+            text_tokens=184
+        ),
+        compute_units=None,
+        prompt_tokens_details=PromptTokensDetails(
+            audio_tokens=None,
+            cache_write_tokens=None,
+            cached_tokens=0,
+            image_tokens=None,
+            text_tokens=63
+        )
+    )
+)
