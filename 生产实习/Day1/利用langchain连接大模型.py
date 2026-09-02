@@ -1,5 +1,4 @@
-from http.client import responses
-
+#从langchain包中的chat_models模块中导入init_chat_model函数
 from langchain.chat_models import init_chat_model
 
 client = init_chat_model(
@@ -15,7 +14,4 @@ client = init_chat_model(
 
 response = client.invoke("你是谁？")
 
-print(response.content)
-
-#pip install langchain langchain-openai
-#langchain底层还是使用的openai的sdk
+print(response)

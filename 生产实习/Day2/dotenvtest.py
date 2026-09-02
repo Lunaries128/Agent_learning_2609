@@ -5,4 +5,4 @@ dotenv.load_dotenv()
 
 #os.getenv
 key=os.getenv("OPENAI_API_KEY")
-url=os.getenv("OPENAI_BASE_URL")
+url=os.getenv("OPENAI_API_BASE")

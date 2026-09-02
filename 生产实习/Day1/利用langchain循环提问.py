@@ -6,11 +6,7 @@ dotenv.load_dotenv()
 
 client = init_chat_model(
     model_provider="openai",
-    model="qwen3.8-max",
-        # 因为openai和langchain底层设计差异，需要增加开启推理开关
-    extra_body={
-        "enable_thinking": True
-        }
+    model="qwen3.8-max"
 )
 
 while True:
@@ -20,13 +16,16 @@ while True:
 
     is_reason=True
 
-    print("="*50+"推理过程"+"="*50)
+
     for chunk in client.stream(user_input):
         if not chunk.content:
             continue
 
+        """
+        langchain的框架默认只保留最终回答内容，主动丢弃了模型返回的推理字段
         if 'reasoning_content' in chunk.additional_kwargs and chunk.additional_kwargs['reasoning_content']:
             print(chunk.additional_kwargs['reasoning_content'], end="", flush=True)
+        """
 
         if chunk.content:
             if is_reason:
