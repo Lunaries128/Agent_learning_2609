@@ -71,6 +71,7 @@ SYSTEM_PROMPT = """
 st.set_page_config(
     page_title="智能旅行规划助手",
     page_icon="🧳",
+    layout="wide",
 )
 
 st.title("智能旅行规划助手")
