@@ -21,14 +21,13 @@ from langchain_openai import ChatOpenAI
 llm = ChatOpenAI(
     # model="qwen3.7-max" ：指定用哪个模型
     # 想换模型（比如换成 gpt-4o）只需要改这一个字符串
-    model="qwen3.7-max",
+    model="qwen-turbo",
 
     # temperature=0 ：模型的"发散程度"，范围 0~1
     # 0 = 最严谨：同样的问题永远给同样答案，不瞎编
     # 1 = 最奔放：答案多样有创意，但可能跑偏
     # 我们做的是数据分析，要准确不要创意，所以用 0
-    #修改为智能旅行规划agent，需要增加创意
-    temperature=0.2,
+    temperature=0,
 )
 # 注意：它没传 api_key 参数——因为 load_dotenv 已经把密钥装进环境变量，
 # ChatOpenAI 会自动去找，找不到才会报错。这就是"约定优于配置"。
