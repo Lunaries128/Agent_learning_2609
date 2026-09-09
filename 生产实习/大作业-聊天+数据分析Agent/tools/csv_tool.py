@@ -37,7 +37,7 @@ def read_csv(file_path: str, nrows: int = 5) -> str:
     except FileNotFoundError:
         # FileNotFoundError = "找不到文件"错误
         # 返回一句人话而不是崩溃——模型收到这句话就知道要去问用户正确路径
-        return "错误：文件不存在: " + r"C:\Users\12403\Desktop\agent-project\demo.csv"
+        return "错误：文件不存在: " + r"C:\Users\12403\Desktop\PythonProject\生产实习\大作业-聊天+数据分析Agent\demo.csv"
 
     # df.empty ：判断表格是不是空的（0 行数据），返回 True/False
     if df.empty:

@@ -1,0 +1,23 @@
+[theme]
+base = "light"
+
+# 按钮、开关、选中状态等点缀色
+primaryColor = "#B9D857"
+
+# 主页面背景
+backgroundColor = "#FFFFFF"
+
+# 侧边栏及组件背景
+secondaryBackgroundColor = "#F4F7EC"
+
+# 主要文字颜色
+textColor = "#263018"
+
+# 字体
+font = "sans-serif"
+
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false
