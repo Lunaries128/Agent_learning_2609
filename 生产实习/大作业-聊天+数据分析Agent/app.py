@@ -1,6 +1,7 @@
 from pathlib import Path
 import uuid
 
+import plotly.io as pio
 import requests
 import streamlit as st
 
@@ -20,11 +21,15 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 
 
 def create_session() -> str:
-    """创建一个新会话。"""
+    """创建新会话。"""
 
-    session_id = str(uuid.uuid4())
+    session_id = str(
+        uuid.uuid4()
+    )
 
-    st.session_state.sessions[session_id] = {
+    st.session_state.sessions[
+        session_id
+    ] = {
         "title": "新对话",
         "messages": [],
         "data_mode": False,
@@ -41,6 +46,149 @@ def create_session() -> str:
     )
 
     return session_id
+
+
+def render_plotly_chart(
+    chart_url: str,
+) -> None:
+    """从后端读取 Plotly JSON 并显示。"""
+
+    try:
+        response = requests.get(
+            f"{API_URL}{chart_url}",
+            timeout=15,
+        )
+
+        response.raise_for_status()
+
+        figure = pio.from_json(
+            response.text
+        )
+
+        st.plotly_chart(
+            figure,
+            use_container_width=True,
+            config={
+                "displaylogo": False,
+                "responsive": True,
+                "toImageButtonOptions": {
+                    "format": "png",
+                    "filename": (
+                        "data_analysis_chart"
+                    ),
+                    "scale": 2,
+                },
+            },
+        )
+
+    except Exception as error:
+        st.warning(
+            f"图表加载失败：{error}"
+        )
+
+
+def render_chart_info(
+    chart_info: dict | None,
+) -> None:
+    """展示图表计算依据。"""
+
+    if not chart_info:
+        return
+
+    chart_state = chart_info.get(
+        "chart_state",
+        {},
+    )
+
+    metadata = chart_info.get(
+        "metadata",
+        {},
+    )
+
+    preview = chart_info.get(
+        "preview",
+        [],
+    )
+
+    with st.expander(
+        "查看图表计算依据"
+    ):
+        column1, column2 = st.columns(2)
+
+        with column1:
+            st.write(
+                "**图表类型：**",
+                chart_state.get(
+                    "chart_type",
+                    "未知",
+                ),
+            )
+
+            st.write(
+                "**分析维度：**",
+                chart_state.get(
+                    "dimension",
+                    "未知",
+                ),
+            )
+
+            st.write(
+                "**分析指标：**",
+                chart_state.get(
+                    "metric"
+                ) or "记录数量",
+            )
+
+        with column2:
+            st.write(
+                "**聚合方式：**",
+                chart_state.get(
+                    "aggregation",
+                    "未知",
+                ),
+            )
+
+            st.write(
+                "**排序方式：**",
+                chart_state.get(
+                    "sort",
+                    "未知",
+                ),
+            )
+
+            st.write(
+                "**显示数量：**",
+                chart_state.get(
+                    "top_n",
+                    "未知",
+                ),
+            )
+
+        st.write(
+            "**原始数据行数：**",
+            metadata.get(
+                "source_rows",
+                "未知",
+            ),
+        )
+
+        st.write(
+            "**删除无效行数：**",
+            metadata.get(
+                "removed_rows",
+                "未知",
+            ),
+        )
+
+        if preview:
+            st.write(
+                "**实际绘图数据预览：**"
+            )
+
+            st.dataframe(
+                preview,
+                use_container_width=True,
+            )
 
 
 if "sessions" not in st.session_state:
@@ -62,19 +210,20 @@ session_id = (
 )
 
 session = (
-    st.session_state.sessions[session_id]
+    st.session_state.sessions[
+        session_id
+    ]
 )
 
 
 with st.sidebar:
     st.header("功能栏")
 
-    # 数据分析功能开关
     data_mode = st.toggle(
         "启用数据分析",
         value=session["data_mode"],
         help=(
-            "打开后可以上传CSV并调用数据分析工具；"
+            "打开后可以上传 CSV 并调用数据分析工具；"
             "关闭后为普通聊天。"
         ),
         key=f"data_toggle_{session_id}",
@@ -83,11 +232,12 @@ with st.sidebar:
     session["data_mode"] = data_mode
 
     if data_mode:
-        st.success("数据分析功能已开启")
+        st.success(
+            "数据分析功能已开启"
+        )
 
-        # 文件上传移动到侧边栏
         uploaded_file = st.file_uploader(
-            "上传CSV文件",
+            "上传 CSV 文件",
             type=["csv"],
             key=f"uploader_{session_id}",
         )
@@ -102,30 +252,41 @@ with st.sidebar:
             )
 
             saved_path = (
-                    UPLOAD_DIR / saved_name
+                UPLOAD_DIR / saved_name
             )
 
-            with open(saved_path, "wb") as file:
-                file.write(
+            # 同一个文件不要在每次刷新时重复写入
+            if (
+                session["csv_path"]
+                != str(saved_path)
+                or not saved_path.exists()
+            ):
+                saved_path.write_bytes(
                     uploaded_file.getbuffer()
                 )
 
             session["csv_path"] = str(
                 saved_path
             )
-            session["csv_name"] = safe_name
+
+            session["csv_name"] = (
+                safe_name
+            )
 
         if session["csv_path"]:
             st.success(
-                f"上传成功，当前文件：{session['csv_name']}"
+                "上传成功，当前文件："
+                f"{session['csv_name']}"
             )
         else:
             st.warning(
-                "请先上传CSV文件"
+                "请先上传 CSV 文件"
             )
 
     else:
-        st.info("当前为普通聊天")
+        st.info(
+            "当前为普通聊天"
+        )
 
     st.divider()
 
@@ -163,7 +324,9 @@ with st.sidebar:
         st.session_state.session_order
     ):
         history_session = (
-            st.session_state.sessions[history_id]
+            st.session_state.sessions[
+                history_id
+            ]
         )
 
         is_current = (
@@ -180,9 +343,11 @@ with st.sidebar:
                 else "secondary"
             ),
         ):
-            st.session_state.current_session_id = (
-                history_id
-            )
+            (
+                st.session_state
+                .current_session_id
+            ) = history_id
+
             st.rerun()
 
 
@@ -191,11 +356,13 @@ st.title("📋 智能聊天助手")
 
 if session["data_mode"]:
     st.caption(
-        "当前可以针对侧边栏上传的CSV文件进行分析"
+        "当前可以针对侧边栏上传的 "
+        "CSV 文件进行智能分析"
     )
 else:
     st.caption(
-        "当前为普通聊天，不会读取或分析CSV文件"
+        "当前为普通聊天，"
+        "不会读取或分析 CSV 文件"
     )
 
 
@@ -213,9 +380,11 @@ except requests.exceptions.RequestException:
         "`python -m uvicorn api:app "
         "--reload --port 8000`"
     )
+
     st.stop()
 
 
+# 显示历史消息
 for message in session["messages"]:
     if message["role"] == "user":
         avatar = ":material/person:"
@@ -230,6 +399,22 @@ for message in session["messages"]:
             message["content"]
         )
 
+        # 新版 Plotly 图表
+        for chart_url in message.get(
+            "charts",
+            [],
+        ):
+            render_plotly_chart(
+                chart_url
+            )
+
+        render_chart_info(
+            message.get(
+                "chart_info"
+            )
+        )
+
+        # 兼容升级前的 PNG 消息
         for image_url in message.get(
             "images",
             [],
@@ -240,14 +425,19 @@ for message in session["messages"]:
 
 
 if session["data_mode"]:
-    input_placeholder = "输入数据分析问题……"
+    input_placeholder = (
+        "输入数据分析问题……"
+    )
 
     input_disabled = not bool(
         session["csv_path"]
     )
 
 else:
-    input_placeholder = "输入聊天内容……"
+    input_placeholder = (
+        "输入聊天内容……"
+    )
+
     input_disabled = False
 
 
@@ -262,40 +452,55 @@ if user_input:
         title = user_input.strip()
 
         if len(title) > 16:
-            title = title[:16] + "..."
+            title = (
+                title[:16] + "..."
+            )
 
         session["title"] = title
 
-    session["messages"].append(
-        {
-            "role": "user",
-            "content": user_input,
-            "images": [],
-        }
-    )
+    session["messages"].append({
+        "role": "user",
+        "content": user_input,
+        "charts": [],
+        "chart_info": None,
+    })
 
-    with st.chat_message("user",avatar=":material/person:"):
+    with st.chat_message(
+        "user",
+        avatar=":material/person:",
+    ):
         st.markdown(user_input)
 
-    with st.chat_message("assistant",avatar=":material/smart_toy:"):
+    with st.chat_message(
+        "assistant",
+        avatar=":material/smart_toy:",
+    ):
         loading_text = (
-            "Agent正在分析数据……"
+            "Agent 正在分析数据……"
             if session["data_mode"]
             else "正在回答……"
         )
 
-        with st.spinner(loading_text):
+        with st.spinner(
+            loading_text
+        ):
             try:
                 response = requests.post(
                     f"{API_URL}/chat",
                     json={
-                        "session_id": session_id,
+                        "session_id": (
+                            session_id
+                        ),
                         "message": user_input,
                         "data_mode": (
-                            session["data_mode"]
+                            session[
+                                "data_mode"
+                            ]
                         ),
                         "csv_path": (
-                            session["csv_path"]
+                            session[
+                                "csv_path"
+                            ]
                         ),
                     },
                     timeout=180,
@@ -303,7 +508,9 @@ if user_input:
 
                 if response.status_code != 200:
                     try:
-                        error_data = response.json()
+                        error_data = (
+                            response.json()
+                        )
 
                         error_message = (
                             error_data.get(
@@ -313,11 +520,15 @@ if user_input:
                         )
 
                     except ValueError:
-                        error_message = response.text
+                        error_message = (
+                            response.text
+                        )
 
                     st.error(
-                        f"后端错误：{error_message}"
+                        "后端错误："
+                        f"{error_message}"
                     )
+
                     st.stop()
 
                 result = response.json()
@@ -326,34 +537,42 @@ if user_input:
                 st.error(
                     f"请求后端失败：{error}"
                 )
+
                 st.stop()
 
             except ValueError:
                 st.error(
-                    "后端没有返回有效JSON。"
+                    "后端没有返回有效 JSON。"
                 )
+
                 st.stop()
 
         st.markdown(
             result["reply"]
         )
 
-        for image_url in result.get(
-            "images",
+        for chart_url in result.get(
+            "charts",
             [],
         ):
-            st.image(
-                f"{API_URL}{image_url}",
-                caption="Agent生成的分析图表",
+            render_plotly_chart(
+                chart_url
             )
 
-    session["messages"].append(
-        {
-            "role": "assistant",
-            "content": result["reply"],
-            "images": result.get(
-                "images",
-                [],
-            ),
-        }
-    )
+        render_chart_info(
+            result.get(
+                "chart_info"
+            )
+        )
+
+    session["messages"].append({
+        "role": "assistant",
+        "content": result["reply"],
+        "charts": result.get(
+            "charts",
+            [],
+        ),
+        "chart_info": result.get(
+            "chart_info"
+        ),
+    })

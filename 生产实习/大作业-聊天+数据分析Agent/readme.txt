@@ -1,5 +1,5 @@
 1.安装库
-pip install langchain langchain-openai dotenv pandas matplotlib fastapi streamlit
+pip install langchain langchain-openai dotenv pandas matplotlib fastapi streamlit requests plotly
 
 启动:
 1.启动后端程序 FastAPI
