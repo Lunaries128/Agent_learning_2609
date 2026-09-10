@@ -1,19 +1,19 @@
+import json
 from pathlib import Path
 
 from fastapi import (
     FastAPI,
-    HTTPException,
 )
 from fastapi.middleware.cors import (
     CORSMiddleware,
 )
+from fastapi.responses import (
+    StreamingResponse,
+)
 from fastapi.staticfiles import (
     StaticFiles,
 )
-from pydantic import (
-    BaseModel,
-    Field,
-)
+from pydantic import BaseModel
 
 import agent
 
@@ -36,7 +36,6 @@ app.add_middleware(
 )
 
 
-# 同时可以提供 JSON 图表和旧 PNG 文件
 app.mount(
     "/charts",
     StaticFiles(
@@ -53,17 +52,6 @@ class ChatRequest(BaseModel):
     csv_path: str = ""
 
 
-class ChatResponse(BaseModel):
-    reply: str
-    data_mode: bool
-
-    charts: list[str] = Field(
-        default_factory=list
-    )
-
-    chart_info: dict | None = None
-
-
 class ClearRequest(BaseModel):
     session_id: str
 
@@ -76,50 +64,85 @@ def health():
     }
 
 
-@app.post(
-    "/chat",
-    response_model=ChatResponse,
-)
-def chat_endpoint(
+@app.post("/chat/stream")
+def chat_stream_endpoint(
     request: ChatRequest,
 ):
-    try:
-        result = agent.chat(
-            session_id=request.session_id,
-            user_input=request.message,
-            data_mode=request.data_mode,
-            csv_path=request.csv_path,
-        )
+    """
+    NDJSON 流式接口。
 
-        chart_urls = [
-            f"/charts/{Path(path).name}"
-            for path in result.get(
-                "charts",
-                [],
+    delta 表示一小段回答；
+    final 表示本次请求结束；
+    error 表示运行出错。
+    """
+
+    def event_generator():
+        try:
+            for event in agent.chat_stream(
+                session_id=(
+                    request.session_id
+                ),
+                user_input=(
+                    request.message
+                ),
+                data_mode=(
+                    request.data_mode
+                ),
+                csv_path=(
+                    request.csv_path
+                ),
+            ):
+                # agent 返回的是本地文件路径，
+                # API 需要转换成浏览器访问地址。
+                if event.get(
+                    "type"
+                ) == "final":
+                    event["charts"] = [
+                        (
+                            f"/charts/"
+                            f"{Path(path).name}"
+                        )
+                        for path in event.get(
+                            "charts",
+                            [],
+                        )
+                    ]
+
+                yield (
+                    json.dumps(
+                        event,
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+
+        except Exception as error:
+            print(
+                "Agent 流式运行错误：",
+                repr(error),
             )
-        ]
 
-        return ChatResponse(
-            reply=result["reply"],
-            data_mode=result[
-                "data_mode"
-            ],
-            charts=chart_urls,
-            chart_info=result.get(
-                "chart_info"
-            ),
-        )
+            yield (
+                json.dumps(
+                    {
+                        "type": "error",
+                        "message": str(error),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
 
-    except Exception as error:
-        print(
-            "Agent 运行错误：",
-            repr(error),
-        )
-
-        raise HTTPException(
-            status_code=500,
-            detail=str(error),
-        ) from error
+    return StreamingResponse(
+        event_generator(),
+        media_type=(
+            "application/x-ndjson"
+        ),
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/clear")

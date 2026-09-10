@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import uuid
 
@@ -51,7 +52,7 @@ def create_session() -> str:
 def render_plotly_chart(
     chart_url: str,
 ) -> None:
-    """从后端读取 Plotly JSON 并显示。"""
+    """从后端读取并显示 Plotly 图表。"""
 
     try:
         response = requests.get(
@@ -191,6 +192,95 @@ def render_chart_info(
             )
 
 
+def read_stream_response(
+    session_id: str,
+    user_input: str,
+    session: dict,
+    result: dict,
+):
+    """
+    读取 FastAPI 返回的 NDJSON。
+
+    每收到一个 delta，
+    就立即交给 st.write_stream 显示。
+    """
+
+    with requests.post(
+        f"{API_URL}/chat/stream",
+        json={
+            "session_id": session_id,
+            "message": user_input,
+            "data_mode": (
+                session["data_mode"]
+            ),
+            "csv_path": (
+                session["csv_path"]
+            ),
+        },
+        stream=True,
+        timeout=180,
+    ) as response:
+        response.raise_for_status()
+
+        for raw_line in response.iter_lines():
+            if not raw_line:
+                continue
+
+            line = raw_line.decode(
+                "utf-8"
+            )
+
+            event = json.loads(
+                line
+            )
+
+            event_type = event.get(
+                "type"
+            )
+
+            if event_type == "delta":
+                content = event.get(
+                    "content",
+                    "",
+                )
+
+                if content:
+                    yield content
+
+            elif event_type == "final":
+                result["charts"] = event.get(
+                    "charts",
+                    [],
+                )
+
+                result["chart_info"] = (
+                    event.get(
+                        "chart_info"
+                    )
+                )
+
+                result["data_mode"] = (
+                    event.get(
+                        "data_mode",
+                        session[
+                            "data_mode"
+                        ],
+                    )
+                )
+
+            elif event_type == "error":
+                raise RuntimeError(
+                    event.get(
+                        "message",
+                        "Agent 运行失败",
+                    )
+                )
+
+
+# ==================================================
+# 初始化 Streamlit 状态
+# ==================================================
+
 if "sessions" not in st.session_state:
     st.session_state.sessions = {}
 
@@ -209,12 +299,14 @@ session_id = (
     st.session_state.current_session_id
 )
 
-session = (
-    st.session_state.sessions[
-        session_id
-    ]
-)
+session = st.session_state.sessions[
+    session_id
+]
 
+
+# ==================================================
+# 侧边栏
+# ==================================================
 
 with st.sidebar:
     st.header("功能栏")
@@ -255,7 +347,6 @@ with st.sidebar:
                 UPLOAD_DIR / saved_name
             )
 
-            # 同一个文件不要在每次刷新时重复写入
             if (
                 session["csv_path"]
                 != str(saved_path)
@@ -269,15 +360,14 @@ with st.sidebar:
                 saved_path
             )
 
-            session["csv_name"] = (
-                safe_name
-            )
+            session["csv_name"] = safe_name
 
         if session["csv_path"]:
             st.success(
                 "上传成功，当前文件："
                 f"{session['csv_name']}"
             )
+
         else:
             st.warning(
                 "请先上传 CSV 文件"
@@ -305,10 +395,13 @@ with st.sidebar:
             requests.post(
                 f"{API_URL}/clear",
                 json={
-                    "session_id": session_id,
+                    "session_id": (
+                        session_id
+                    ),
                 },
                 timeout=5,
             )
+
         except requests.exceptions.RequestException:
             pass
 
@@ -351,6 +444,10 @@ with st.sidebar:
             st.rerun()
 
 
+# ==================================================
+# 主页面
+# ==================================================
+
 st.title("📋 智能聊天助手")
 
 
@@ -359,6 +456,7 @@ if session["data_mode"]:
         "当前可以针对侧边栏上传的 "
         "CSV 文件进行智能分析"
     )
+
 else:
     st.caption(
         "当前为普通聊天，"
@@ -366,6 +464,7 @@ else:
     )
 
 
+# 检查后端
 try:
     health_response = requests.get(
         f"{API_URL}/health",
@@ -388,6 +487,7 @@ except requests.exceptions.RequestException:
 for message in session["messages"]:
     if message["role"] == "user":
         avatar = ":material/person:"
+
     else:
         avatar = ":material/smart_toy:"
 
@@ -399,7 +499,6 @@ for message in session["messages"]:
             message["content"]
         )
 
-        # 新版 Plotly 图表
         for chart_url in message.get(
             "charts",
             [],
@@ -414,7 +513,7 @@ for message in session["messages"]:
             )
         )
 
-        # 兼容升级前的 PNG 消息
+        # 兼容旧版 PNG
         for image_url in message.get(
             "images",
             [],
@@ -424,6 +523,7 @@ for message in session["messages"]:
             )
 
 
+# 输入框状态
 if session["data_mode"]:
     input_placeholder = (
         "输入数据分析问题……"
@@ -446,6 +546,10 @@ user_input = st.chat_input(
     disabled=input_disabled,
 )
 
+
+# ==================================================
+# 发送消息并流式显示
+# ==================================================
 
 if user_input:
     if not session["messages"]:
@@ -471,103 +575,87 @@ if user_input:
     ):
         st.markdown(user_input)
 
+    result = {
+        "charts": [],
+        "chart_info": None,
+        "data_mode": (
+            session["data_mode"]
+        ),
+    }
+
+    reply = ""
+
     with st.chat_message(
         "assistant",
         avatar=":material/smart_toy:",
     ):
-        loading_text = (
-            "Agent 正在分析数据……"
-            if session["data_mode"]
-            else "正在回答……"
-        )
-
-        with st.spinner(
-            loading_text
-        ):
-            try:
-                response = requests.post(
-                    f"{API_URL}/chat",
-                    json={
-                        "session_id": (
-                            session_id
-                        ),
-                        "message": user_input,
-                        "data_mode": (
-                            session[
-                                "data_mode"
-                            ]
-                        ),
-                        "csv_path": (
-                            session[
-                                "csv_path"
-                            ]
-                        ),
-                    },
-                    timeout=180,
+        try:
+            reply = st.write_stream(
+                read_stream_response(
+                    session_id=(
+                        session_id
+                    ),
+                    user_input=(
+                        user_input
+                    ),
+                    session=session,
+                    result=result,
                 )
-
-                if response.status_code != 200:
-                    try:
-                        error_data = (
-                            response.json()
-                        )
-
-                        error_message = (
-                            error_data.get(
-                                "detail",
-                                response.text,
-                            )
-                        )
-
-                    except ValueError:
-                        error_message = (
-                            response.text
-                        )
-
-                    st.error(
-                        "后端错误："
-                        f"{error_message}"
-                    )
-
-                    st.stop()
-
-                result = response.json()
-
-            except requests.exceptions.RequestException as error:
-                st.error(
-                    f"请求后端失败：{error}"
-                )
-
-                st.stop()
-
-            except ValueError:
-                st.error(
-                    "后端没有返回有效 JSON。"
-                )
-
-                st.stop()
-
-        st.markdown(
-            result["reply"]
-        )
-
-        for chart_url in result.get(
-            "charts",
-            [],
-        ):
-            render_plotly_chart(
-                chart_url
             )
 
-        render_chart_info(
-            result.get(
-                "chart_info"
+            if not reply:
+                reply = (
+                    "模型没有返回文本内容。"
+                )
+
+            for chart_url in result.get(
+                "charts",
+                [],
+            ):
+                render_plotly_chart(
+                    chart_url
+                )
+
+            render_chart_info(
+                result.get(
+                    "chart_info"
+                )
             )
-        )
+
+        except requests.exceptions.RequestException as error:
+            reply = (
+                f"请求后端失败：{error}"
+            )
+
+            st.error(reply)
+
+        except (
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+        ) as error:
+            reply = (
+                f"流式数据解析失败：{error}"
+            )
+
+            st.error(reply)
+
+        except RuntimeError as error:
+            reply = (
+                f"Agent 运行失败：{error}"
+            )
+
+            st.error(reply)
+
+        except Exception as error:
+            reply = (
+                f"程序运行错误：{error}"
+            )
+
+            st.error(reply)
 
     session["messages"].append({
         "role": "assistant",
-        "content": result["reply"],
+        "content": reply,
         "charts": result.get(
             "charts",
             [],

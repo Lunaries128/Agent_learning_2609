@@ -1,24 +1,41 @@
 import json
+from collections.abc import Generator
 from pathlib import Path
 
 from langchain.agents import create_agent
 from langchain_core.messages import (
     AIMessage,
+    AIMessageChunk,
     HumanMessage,
     SystemMessage,
     ToolMessage,
 )
+from langchain_core.prompts import (
+    ChatPromptTemplate,
+    MessagesPlaceholder,
+)
+from langchain_core.runnables.history import (
+    RunnableWithMessageHistory,
+)
+from langgraph.graph.message import (
+    add_messages,
+)
 
 from llm import llm
+from memory import (
+    clear_chat_history,
+    get_chat_history,
+    summarize_chat_history,
+)
+from tools.calculator_tool import calculator
+from tools.chart_tool import make_chart
 from tools.csv_tool import read_csv
 from tools.sql_tool import sql_query
 from tools.stats_tool import (
+    stats_group_agg,
     stats_summary,
     stats_value_counts,
-    stats_group_agg,
 )
-from tools.chart_tool import make_chart
-from tools.calculator_tool import calculator
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -95,6 +112,45 @@ DATA_SYSTEM_PROMPT = """
 """
 
 
+# ==================================================
+# 普通聊天：Prompt + RunnableWithMessageHistory
+# ==================================================
+
+chat_prompt = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        CHAT_SYSTEM_PROMPT,
+    ),
+    MessagesPlaceholder(
+        variable_name="history"
+    ),
+    (
+        "human",
+        "{input}",
+    ),
+])
+
+
+normal_chat_chain = (
+    chat_prompt
+    | llm
+)
+
+
+normal_chat_with_history = (
+    RunnableWithMessageHistory(
+        normal_chat_chain,
+        get_chat_history,
+        input_messages_key="input",
+        history_messages_key="history",
+    )
+)
+
+
+# ==================================================
+# 数据分析 Agent
+# ==================================================
+
 data_agent = create_agent(
     model=llm,
     tools=[
@@ -110,16 +166,22 @@ data_agent = create_agent(
 )
 
 
-# 普通聊天和数据分析的历史相互隔离
-_chat_sessions: dict[str, list] = {}
-_data_sessions: dict[str, list] = {}
+# 数据分析历史
+_data_sessions: dict[
+    str,
+    list,
+] = {}
 
-# 单独保存最近一次结构化分析状态
-_analysis_states: dict[str, dict] = {}
+
+# 最近一次结构化分析状态
+_analysis_states: dict[
+    str,
+    dict,
+] = {}
 
 
 def content_to_text(content) -> str:
-    """兼容不同模型的消息格式。"""
+    """兼容不同模型返回的消息格式。"""
 
     if isinstance(content, str):
         return content
@@ -132,61 +194,24 @@ def content_to_text(content) -> str:
                 parts.append(block)
 
             elif isinstance(block, dict):
-                block_text = block.get("text")
+                block_text = block.get(
+                    "text"
+                )
 
                 if block_text:
-                    parts.append(block_text)
+                    parts.append(
+                        block_text
+                    )
 
         return "".join(parts)
 
     return str(content) if content else ""
 
 
-def trim_normal_history(
-    history: list,
-    max_messages: int = 20,
-) -> list:
-    """普通聊天只保留最近若干条消息。"""
-
-    return history[-max_messages:]
-
-
-def trim_data_history(
-    messages: list,
-    max_user_turns: int = 5,
-) -> list:
-    """
-    保留最近几个完整数据分析回合。
-
-    不能简单 messages[-20:]，因为这样可能把
-    AI 工具调用和 ToolMessage 从中间切断。
-    """
-
-    user_positions = [
-        index
-        for index, message in enumerate(
-            messages
-        )
-        if isinstance(
-            message,
-            HumanMessage,
-        )
-    ]
-
-    if len(user_positions) <= max_user_turns:
-        return messages
-
-    start_index = user_positions[
-        -max_user_turns
-    ]
-
-    return messages[start_index:]
-
-
 def extract_chart_state(
     messages: list,
 ) -> dict | None:
-    """从工具消息中读取最后一次成功的绘图状态。"""
+    """从工具消息中读取最后一次绘图状态。"""
 
     for message in reversed(messages):
         if not isinstance(
@@ -201,6 +226,7 @@ def extract_chart_state(
 
         try:
             data = json.loads(content)
+
         except (
             json.JSONDecodeError,
             TypeError,
@@ -232,7 +258,7 @@ def extract_chart_state(
 def get_new_chart_files(
     before: set[str],
 ) -> list[str]:
-    """获取当前请求中新生成的 Plotly JSON。"""
+    """获取当前请求中新生成的图表文件。"""
 
     after = {
         path.name
@@ -251,67 +277,223 @@ def get_new_chart_files(
     ]
 
 
-def run_normal_chat(
-    session_id: str,
-    user_input: str,
-) -> dict:
-    """关闭数据分析时执行普通聊天。"""
+def messages_to_summary_text(
+    messages: list,
+) -> str:
+    """把数据分析消息转换为摘要文本。"""
 
-    history = _chat_sessions.setdefault(
-        session_id,
-        [],
-    )
+    parts = []
 
-    history.append({
-        "role": "user",
-        "content": user_input,
-    })
+    for message in messages:
+        content = content_to_text(
+            message.content
+        )
 
-    history = trim_normal_history(
-        history
-    )
+        if isinstance(
+            message,
+            HumanMessage,
+        ):
+            role = "用户"
 
-    model_messages = [
-        SystemMessage(
-            content=CHAT_SYSTEM_PROMPT
-        ),
-        *history,
+        elif isinstance(
+            message,
+            AIMessage,
+        ):
+            role = "数据分析助手"
+
+        elif isinstance(
+            message,
+            ToolMessage,
+        ):
+            role = "工具执行结果"
+
+        elif isinstance(
+            message,
+            SystemMessage,
+        ):
+            role = "已有历史摘要"
+
+        else:
+            role = "其他消息"
+
+        parts.append(
+            f"{role}：{content}"
+        )
+
+    return "\n".join(parts)
+
+
+def summarize_data_history(
+    messages: list,
+    max_user_turns: int = 6,
+    keep_user_turns: int = 3,
+) -> list:
+    """
+    数据分析历史摘要压缩。
+
+    保留最近几个完整分析回合，
+    较早内容压缩成 SystemMessage。
+    """
+
+    user_positions = [
+        index
+        for index, message in enumerate(
+            messages
+        )
+        if isinstance(
+            message,
+            HumanMessage,
+        )
     ]
 
-    response = llm.invoke(
-        model_messages
+    if (
+        len(user_positions)
+        <= max_user_turns
+    ):
+        return messages
+
+    recent_start = user_positions[
+        -keep_user_turns
+    ]
+
+    old_messages = messages[
+        :recent_start
+    ]
+
+    recent_messages = messages[
+        recent_start:
+    ]
+
+    old_history_text = (
+        messages_to_summary_text(
+            old_messages
+        )
     )
 
-    reply = content_to_text(
+    response = llm.invoke([
+        SystemMessage(
+            content=(
+                "你负责压缩数据分析历史。"
+                "不要重新分析数据，"
+                "不要编造工具结果，"
+                "只生成历史摘要。"
+            )
+        ),
+        HumanMessage(
+            content=f"""
+请将下面的数据分析历史压缩成一份准确的中文摘要。
+
+必须保留：
+
+1. CSV 文件路径或文件信息；
+2. 用户的数据分析目标；
+3. 已确认的列名；
+4. 使用过的筛选条件；
+5. 图表维度和指标；
+6. 聚合方式、排序方式和 Top N；
+7. 已经得到的重要结论；
+8. 工具执行错误和未解决问题；
+9. 后续分析需要继承的参数。
+
+数据分析历史：
+
+{old_history_text}
+"""
+        ),
+    ])
+
+    summary_text = content_to_text(
         response.content
     )
 
-    if not reply:
-        reply = "模型没有返回文本内容。"
+    return [
+        SystemMessage(
+            content=(
+                "下面是较早数据分析历史的"
+                "压缩摘要，请在后续分析中参考：\n"
+                f"{summary_text}"
+            )
+        ),
+        *recent_messages,
+    ]
 
-    history.append({
-        "role": "assistant",
-        "content": reply,
-    })
 
-    _chat_sessions[session_id] = (
-        trim_normal_history(history)
+def stream_normal_chat(
+    session_id: str,
+    user_input: str,
+) -> Generator[dict, None, None]:
+    """
+    普通聊天真正流式输出。
+
+    RunnableWithMessageHistory 自动完成：
+    1. 读取历史；
+    2. 插入历史；
+    3. 保存用户消息；
+    4. 保存助手回答。
+    """
+
+    full_reply = ""
+
+    stream = normal_chat_with_history.stream(
+        {
+            "input": user_input,
+        },
+        config={
+            "configurable": {
+                "session_id": (
+                    session_id
+                ),
+            },
+        },
     )
 
-    return {
-        "reply": reply,
+    for chunk in stream:
+        text = content_to_text(
+            chunk.content
+        )
+
+        if not text:
+            continue
+
+        full_reply += text
+
+        yield {
+            "type": "delta",
+            "content": text,
+        }
+
+    if not full_reply:
+        full_reply = (
+            "模型没有返回文本内容。"
+        )
+
+        yield {
+            "type": "delta",
+            "content": full_reply,
+        }
+
+    # Runnable 流执行完成后，历史已经自动保存
+    summarize_chat_history(
+        session_id=session_id,
+        max_messages=16,
+        keep_messages=6,
+    )
+
+    yield {
+        "type": "final",
+        "reply": full_reply,
+        "data_mode": False,
         "charts": [],
         "chart_info": None,
-        "data_mode": False,
     }
 
 
-def run_data_chat(
+def stream_data_chat(
     session_id: str,
     user_input: str,
     csv_path: str,
-) -> dict:
-    """打开数据分析开关时执行数据 Agent。"""
+) -> Generator[dict, None, None]:
+    """数据分析 Agent 的流式运行。"""
 
     history = _data_sessions.setdefault(
         session_id,
@@ -344,14 +526,19 @@ def run_data_chat(
 {user_input}
 
 请根据本轮问题决定是否继承上一轮分析参数。
-只有用户要求修改的参数才需要改变。
+只有用户明确要求修改的参数才需要改变。
 """
 
-    history.append(
+    current_human_message = (
         HumanMessage(
             content=data_question
         )
     )
+
+    input_messages = [
+        *history,
+        current_human_message,
+    ]
 
     before = {
         path.name
@@ -360,18 +547,49 @@ def run_data_chat(
         )
     }
 
-    result = data_agent.invoke(
+    new_messages = []
+    full_reply = ""
+
+    stream = data_agent.stream(
         {
-            "messages": history,
+            "messages": input_messages,
         },
         config={
             "recursion_limit": 30,
         },
+        stream_mode="messages",
     )
 
-    result_messages = result[
-        "messages"
-    ]
+    for message, metadata in stream:
+        new_messages = add_messages(
+            new_messages,
+            [message],
+        )
+
+        # 只把大模型生成的文本发送到前端，
+        # 不直接显示 ToolMessage 的 JSON。
+        if isinstance(
+            message,
+            AIMessageChunk,
+        ):
+            text = content_to_text(
+                message.content
+            )
+
+            if not text:
+                continue
+
+            full_reply += text
+
+            yield {
+                "type": "delta",
+                "content": text,
+            }
+
+    result_messages = add_messages(
+        input_messages,
+        new_messages,
+    )
 
     new_state = extract_chart_state(
         result_messages
@@ -382,58 +600,92 @@ def run_data_chat(
             session_id
         ] = new_state
 
-    _data_sessions[session_id] = (
-        trim_data_history(
-            result_messages
-        )
+    _data_sessions[
+        session_id
+    ] = summarize_data_history(
+        result_messages,
+        max_user_turns=6,
+        keep_user_turns=3,
     )
 
     chart_files = get_new_chart_files(
         before
     )
 
-    reply = content_to_text(
-        result_messages[-1].content
-    )
+    if not full_reply:
+        # 某些模型或 LangGraph 版本可能只返回完整 AIMessage
+        for message in reversed(
+            result_messages
+        ):
+            if isinstance(
+                message,
+                AIMessage,
+            ):
+                full_reply = content_to_text(
+                    message.content
+                )
 
-    if not reply:
-        reply = (
-            "数据分析 Agent "
-            "没有返回文本内容。"
-        )
+                if full_reply:
+                    break
 
-    return {
-        "reply": reply,
+        if not full_reply:
+            full_reply = (
+                "数据分析 Agent "
+                "没有返回文本内容。"
+            )
+
+        yield {
+            "type": "delta",
+            "content": full_reply,
+        }
+
+    yield {
+        "type": "final",
+        "reply": full_reply,
+        "data_mode": True,
         "charts": chart_files,
         "chart_info": new_state,
-        "data_mode": True,
     }
 
 
-def chat(
+def chat_stream(
     session_id: str,
     user_input: str,
     data_mode: bool,
     csv_path: str = "",
-) -> dict:
-    """根据开关状态选择处理链路。"""
+) -> Generator[dict, None, None]:
+    """根据开关状态选择流式处理链路。"""
 
     if data_mode:
         if not csv_path:
-            return {
-                "reply": "请先上传 CSV 文件。",
-                "charts": [],
-                "chart_info": None,
-                "data_mode": True,
+            message = (
+                "请先上传 CSV 文件。"
+            )
+
+            yield {
+                "type": "delta",
+                "content": message,
             }
 
-        return run_data_chat(
+            yield {
+                "type": "final",
+                "reply": message,
+                "data_mode": True,
+                "charts": [],
+                "chart_info": None,
+            }
+
+            return
+
+        yield from stream_data_chat(
             session_id=session_id,
             user_input=user_input,
             csv_path=csv_path,
         )
 
-    return run_normal_chat(
+        return
+
+    yield from stream_normal_chat(
         session_id=session_id,
         user_input=user_input,
     )
@@ -444,9 +696,8 @@ def clear_session(
 ) -> None:
     """清空指定会话的所有后端记忆。"""
 
-    _chat_sessions.pop(
-        session_id,
-        None,
+    clear_chat_history(
+        session_id
     )
 
     _data_sessions.pop(
